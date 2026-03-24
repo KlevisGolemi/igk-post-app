@@ -1,0 +1,276 @@
+services:
+  # -----------------------
+  # Application
+  # -----------------------
+  postiz:
+    image: ghcr.io/klevisgolemi/igk-post-app:latest
+    container_name: postiz
+    restart: unless-stopped
+    environment:
+      MAIN_URL: "${MAIN_URL}"
+      FRONTEND_URL: "${FRONTEND_URL}"
+      NEXT_PUBLIC_BACKEND_URL: "${NEXT_PUBLIC_BACKEND_URL}"
+      JWT_SECRET: "${JWT_SECRET}"
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postiz-postgres:5432/${POSTGRES_DB}"
+      REDIS_URL: "redis://postiz-redis:6379"
+      BACKEND_INTERNAL_URL: "http://localhost:3000"
+      TEMPORAL_ADDRESS: "temporal:7233"
+      IS_GENERAL: "${IS_GENERAL:-true}"
+      DISABLE_REGISTRATION: "${DISABLE_REGISTRATION:-false}"
+
+      # Storage
+      STORAGE_PROVIDER: "${STORAGE_PROVIDER:-cloudflare}"
+      UPLOAD_DIRECTORY: "/uploads"
+      NEXT_PUBLIC_UPLOAD_DIRECTORY: "/uploads"
+      CLOUDFLARE_ACCOUNT_ID: "${CLOUDFLARE_ACCOUNT_ID}"
+      CLOUDFLARE_ACCESS_KEY: "${CLOUDFLARE_ACCESS_KEY}"
+      CLOUDFLARE_SECRET_ACCESS_KEY: "${CLOUDFLARE_SECRET_ACCESS_KEY}"
+      CLOUDFLARE_BUCKETNAME: "${CLOUDFLARE_BUCKETNAME}"
+      CLOUDFLARE_BUCKET_URL: "${CLOUDFLARE_BUCKET_URL}"
+      CLOUDFLARE_REGION: "${CLOUDFLARE_REGION:-auto}"
+
+      # Social Media APIs
+      X_API_KEY: "${X_API_KEY}"
+      X_API_SECRET: "${X_API_SECRET}"
+      LINKEDIN_CLIENT_ID: "${LINKEDIN_CLIENT_ID}"
+      LINKEDIN_CLIENT_SECRET: "${LINKEDIN_CLIENT_SECRET}"
+      REDDIT_CLIENT_ID: "${REDDIT_CLIENT_ID}"
+      REDDIT_CLIENT_SECRET: "${REDDIT_CLIENT_SECRET}"
+      GITHUB_CLIENT_ID: "${GITHUB_CLIENT_ID}"
+      GITHUB_CLIENT_SECRET: "${GITHUB_CLIENT_SECRET}"
+      BEEHIIVE_API_KEY: "${BEEHIIVE_API_KEY}"
+      BEEHIIVE_PUBLICATION_ID: "${BEEHIIVE_PUBLICATION_ID}"
+      THREADS_APP_ID: "${THREADS_APP_ID}"
+      THREADS_APP_SECRET: "${THREADS_APP_SECRET}"
+      FACEBOOK_APP_ID: "${FACEBOOK_APP_ID}"
+      FACEBOOK_APP_SECRET: "${FACEBOOK_APP_SECRET}"
+      YOUTUBE_CLIENT_ID: "${YOUTUBE_CLIENT_ID}"
+      YOUTUBE_CLIENT_SECRET: "${YOUTUBE_CLIENT_SECRET}"
+      TIKTOK_CLIENT_ID: "${TIKTOK_CLIENT_ID}"
+      TIKTOK_CLIENT_SECRET: "${TIKTOK_CLIENT_SECRET}"
+      PINTEREST_CLIENT_ID: "${PINTEREST_CLIENT_ID}"
+      PINTEREST_CLIENT_SECRET: "${PINTEREST_CLIENT_SECRET}"
+      DRIBBBLE_CLIENT_ID: "${DRIBBBLE_CLIENT_ID}"
+      DRIBBBLE_CLIENT_SECRET: "${DRIBBBLE_CLIENT_SECRET}"
+      DISCORD_CLIENT_ID: "${DISCORD_CLIENT_ID}"
+      DISCORD_CLIENT_SECRET: "${DISCORD_CLIENT_SECRET}"
+      DISCORD_BOT_TOKEN_ID: "${DISCORD_BOT_TOKEN_ID}"
+      SLACK_ID: "${SLACK_ID}"
+      SLACK_SECRET: "${SLACK_SECRET}"
+      SLACK_SIGNING_SECRET: "${SLACK_SIGNING_SECRET}"
+      MASTODON_URL: "${MASTODON_URL:-https://mastodon.social}"
+      MASTODON_CLIENT_ID: "${MASTODON_CLIENT_ID}"
+      MASTODON_CLIENT_SECRET: "${MASTODON_CLIENT_SECRET}"
+
+      # Optional
+      OPENAI_API_KEY: "${OPENAI_API_KEY}"
+      NEXT_PUBLIC_DISCORD_SUPPORT: "${NEXT_PUBLIC_DISCORD_SUPPORT}"
+      NEXT_PUBLIC_POLOTNO: "${NEXT_PUBLIC_POLOTNO}"
+      API_LIMIT: "${API_LIMIT:-30}"
+      NEXT_PUBLIC_SHOW_AGENTATION: "${NEXT_PUBLIC_SHOW_AGENTATION:-true}"
+      NX_ADD_PLUGINS: "false"
+
+    volumes:
+      - postiz-config:/config/
+      - postiz-uploads:/uploads/
+    expose:
+      - "5000"
+    networks:
+      - postiz-network
+      - temporal-network
+      - traefik-network
+    depends_on:
+      postiz-postgres:
+        condition: service_healthy
+      postiz-redis:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5000/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.postra.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.postra.entrypoints=websecure"
+      - "traefik.http.routers.postra.tls.certresolver=letsencrypt"
+      - "traefik.http.services.postra.loadbalancer.server.port=5000"
+
+  # -----------------------
+  # App Database
+  # -----------------------
+  postiz-postgres:
+    image: postgres:17-alpine
+    container_name: postiz-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_DB: "${POSTGRES_DB}"
+    volumes:
+      - postgres-volume:/var/lib/postgresql/data
+    networks:
+      - postiz-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # -----------------------
+  # Redis
+  # -----------------------
+  postiz-redis:
+    image: redis:7.2
+    container_name: postiz-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    volumes:
+      - postiz-redis-data:/data
+    networks:
+      - postiz-network
+
+  # -----------------------
+  # Temporal Stack
+  # -----------------------
+  temporal-elasticsearch:
+    container_name: temporal-elasticsearch
+    image: elasticsearch:7.17.27
+    restart: unless-stopped
+    environment:
+      - cluster.routing.allocation.disk.threshold_enabled=true
+      - cluster.routing.allocation.disk.watermark.low=512mb
+      - cluster.routing.allocation.disk.watermark.high=256mb
+      - cluster.routing.allocation.disk.watermark.flood_stage=128mb
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
+      - xpack.security.enabled=false
+    networks:
+      - temporal-network
+    expose:
+      - "9200"
+    volumes:
+      - temporal-es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  temporal-postgresql:
+    container_name: temporal-postgresql
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: "${TEMPORAL_POSTGRES_PASSWORD}"
+      POSTGRES_USER: "${TEMPORAL_POSTGRES_USER:-temporal}"
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_INITDB_ARGS: "--auth-host=md5"
+    networks:
+      - temporal-network
+    expose:
+      - "5432"
+    volumes:
+      - temporal-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${TEMPORAL_POSTGRES_USER:-temporal}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  temporal:
+    container_name: temporal
+    image: temporalio/auto-setup:1.28.1
+    restart: unless-stopped
+    depends_on:
+      temporal-postgresql:
+        condition: service_healthy
+      temporal-elasticsearch:
+        condition: service_healthy
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=${TEMPORAL_POSTGRES_USER:-temporal}
+      - POSTGRES_PWD=${TEMPORAL_POSTGRES_PASSWORD}
+      - POSTGRES_SEEDS=temporal-postgresql
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/production-sql.yaml
+      - ENABLE_ES=true
+      - ES_SEEDS=temporal-elasticsearch
+      - ES_VERSION=v7
+      - TEMPORAL_NAMESPACE=default
+    networks:
+      - temporal-network
+    expose:
+      - "7233"
+    volumes:
+      - ../dynamicconfig:/etc/temporal/config/dynamicconfig
+    healthcheck:
+      test: ["CMD-SHELL", "tctl cluster health | grep -q SERVING || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    labels:
+      kompose.volume.type: configMap
+
+  temporal-admin-tools:
+    container_name: temporal-admin-tools
+    image: temporalio/admin-tools:1.28.1-tctl-1.18.4-cli-1.4.1
+    restart: unless-stopped
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CLI_ADDRESS=temporal:7233
+    networks:
+      - temporal-network
+    stdin_open: true
+    depends_on:
+      temporal:
+        condition: service_healthy
+    tty: true
+
+  temporal-ui:
+    container_name: temporal-ui
+    image: temporalio/ui:2.34.0
+    restart: unless-stopped
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://127.0.0.1:3000
+    networks:
+      - temporal-network
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      temporal:
+        condition: service_healthy
+
+# -----------------------
+# Volumes (all named for persistence)
+# -----------------------
+volumes:
+  postgres-volume:
+  postiz-redis-data:
+  postiz-config:
+  postiz-uploads:
+  temporal-pg-data:
+  temporal-es-data:
+
+# -----------------------
+# Networks
+# -----------------------
+networks:
+  postiz-network:
+    driver: bridge
+  temporal-network:
+    driver: bridge
+    name: temporal-network
+  traefik-network:
+    external: true
+    name: traefik-network
