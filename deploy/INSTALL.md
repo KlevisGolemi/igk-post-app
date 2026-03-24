@@ -285,6 +285,21 @@ docker inspect traefik --format='{{range $k,$v := .NetworkSettings.Networks}}{{$
 > **Note** : Cela ne deconnecte PAS Traefik de ses reseaux existants.
 > Vos autres applications continueront de fonctionner normalement.
 
+Ensuite, verifiez le nom du **certresolver** dans votre config Traefik :
+
+```bash
+# Trouver le nom du certresolver (ex: letsencrypt, mytlschallenge, myresolver...)
+docker exec traefik cat /etc/traefik/traefik.yml 2>/dev/null || \
+docker exec traefik cat /etc/traefik/traefik.yaml 2>/dev/null
+# Cherchez: certificatesResolvers: → le nom juste en dessous
+
+# Mettez ce nom dans votre .env :
+# TRAEFIK_CERTRESOLVER=mytlschallenge
+```
+
+> **Important** : si le nom ne correspond pas, Traefik servira son certificat par defaut
+> au lieu du vrai certificat Let's Encrypt.
+
 #### Cas B : Pas de Traefik, il faut l'installer
 
 ```bash
@@ -635,6 +650,10 @@ docker system df -v
 docker compose -f docker-compose.prod.yaml logs postiz --tail 50
 ```
 
+> **Note importante sur les healthchecks** : L'image Postra ne contient ni `curl`, ni `wget`,
+> ni `nc`. Le healthcheck utilise `ss -lnt | grep -q ':5000'` pour verifier que le port 5000
+> est en ecoute. Si vous modifiez le healthcheck, n'utilisez pas `curl`.
+
 **Causes possibles** :
 
 | Message dans les logs | Cause | Solution |
@@ -676,11 +695,15 @@ docker compose -f docker-compose.prod.yaml logs postiz --tail 50
 
 ### Erreur SSL / certificat
 
-**Symptome** : navigateur affiche "votre connexion n'est pas privee".
+**Symptome** : navigateur affiche "votre connexion n'est pas privee" ou le certificat
+affiche "TRAEFIK DEFAULT CERT" au lieu de Let's Encrypt.
 
 ```bash
 # Verifier les logs Traefik
 docker logs traefik --tail 30 | grep -i acme
+
+# Verifier le certificat servi
+curl -Iv https://votre-domaine.com 2>&1 | grep -i 'issuer\|subject'
 ```
 
 **Causes possibles** :
@@ -688,6 +711,15 @@ docker logs traefik --tail 30 | grep -i acme
 - Le proxy Cloudflare est active (icone orange) → passez en "DNS only" (grise)
 - Le port 80 est bloque → `ufw allow 80/tcp`
 - Rate limit Let's Encrypt → attendez 1 heure et reessayez
+- **Mauvais nom de certresolver** → le label `traefik.http.routers.postra.tls.certresolver`
+  doit correspondre au nom defini dans votre config Traefik. Verifiez avec :
+  ```bash
+  # Voir le nom du certresolver dans la config Traefik
+  docker exec traefik cat /etc/traefik/traefik.yml 2>/dev/null || \
+  docker exec traefik cat /etc/traefik/traefik.yaml 2>/dev/null
+  # Cherchez la section certificatesResolvers: → le nom juste en dessous
+  # Puis mettez a jour TRAEFIK_CERTRESOLVER dans votre .env
+  ```
 
 ### Erreur 502 Bad Gateway
 
@@ -717,12 +749,17 @@ docker inspect --format='{{.State.Health.Status}}' temporal-elasticsearch
 docker inspect --format='{{.State.Health.Status}}' temporal-postgresql
 ```
 
-**Cause courante** : Elasticsearch manque de memoire.
-```bash
-# Verifier la memoire disponible
-free -h
-docker stats --no-stream
-```
+> **Note** : Le healthcheck de Temporal utilise `temporal operator cluster health --address temporal:7233`.
+> L'adresse doit etre `temporal:7233` (nom du service Docker), pas `localhost:7233`.
+> L'ancienne commande `tctl cluster health` est depreciee.
+
+**Causes courantes** :
+- Elasticsearch manque de memoire :
+  ```bash
+  free -h
+  docker stats --no-stream
+  ```
+- Temporal PostgreSQL n'est pas pret → verifier son healthcheck avant de demarrer Temporal
 
 ### L'image Docker ne peut pas etre telechargee
 
@@ -775,6 +812,7 @@ bash /docker/postra/deploy/deploy.sh
 | `POSTGRES_DB` | Nom de la base de donnees | `postiz` |
 | `TEMPORAL_POSTGRES_PASSWORD` | Mot de passe PostgreSQL Temporal | (genere automatiquement) |
 | `STORAGE_PROVIDER` | Fournisseur de stockage | `cloudflare` ou `local` |
+| `TRAEFIK_CERTRESOLVER` | Nom du certresolver Traefik (auto-detecte par deploy.sh) | `letsencrypt` |
 
 ### Variables Cloudflare R2
 

@@ -77,6 +77,49 @@ detect_traefik_container() {
   docker ps --format '{{.Names}}\t{{.Image}}' | grep -i 'traefik' | head -1 | cut -f1
 }
 
+detect_certresolver() {
+  # Auto-detect the certresolver name from an existing Traefik container's labels or config
+  local traefik_container="$1"
+
+  if [ -z "$traefik_container" ]; then
+    return
+  fi
+
+  # Method 1: Check other containers' labels for certresolver names
+  local resolver
+  resolver=$(docker ps --format '{{.Names}}' | while read -r name; do
+    docker inspect --format='{{range $k,$v := .Config.Labels}}{{$k}}={{$v}}{{"\n"}}{{end}}' "$name" 2>/dev/null \
+      | grep -oP 'traefik\.http\.routers\.\w+\.tls\.certresolver=\K\S+' \
+      | head -1
+  done | head -1)
+
+  if [ -n "$resolver" ]; then
+    echo "$resolver"
+    return
+  fi
+
+  # Method 2: Check Traefik's own static config (if mounted as a volume)
+  resolver=$(docker exec "$traefik_container" cat /etc/traefik/traefik.yml 2>/dev/null \
+    | grep -A2 'certificatesResolvers:' \
+    | grep -oP '^\s+\K[a-zA-Z0-9_-]+(?=:)' \
+    | head -1)
+
+  if [ -n "$resolver" ]; then
+    echo "$resolver"
+    return
+  fi
+
+  # Method 3: Try traefik.yaml variant
+  resolver=$(docker exec "$traefik_container" cat /etc/traefik/traefik.yaml 2>/dev/null \
+    | grep -A2 'certificatesResolvers:' \
+    | grep -oP '^\s+\K[a-zA-Z0-9_-]+(?=:)' \
+    | head -1)
+
+  if [ -n "$resolver" ]; then
+    echo "$resolver"
+  fi
+}
+
 ensure_traefik_network() {
   local traefik_container="$1"
 
@@ -123,6 +166,18 @@ setup_traefik() {
   if [ -n "$traefik_container" ]; then
     log "Traefik detected: container '${traefik_container}' is running"
     ensure_traefik_network "$traefik_container"
+
+    # Auto-detect certresolver name
+    local detected_resolver
+    detected_resolver=$(detect_certresolver "$traefik_container")
+    if [ -n "$detected_resolver" ]; then
+      log "Detected certresolver: '${detected_resolver}'"
+      DETECTED_CERTRESOLVER="$detected_resolver"
+    else
+      warn "Could not auto-detect certresolver name. Will use default 'letsencrypt'."
+      warn "If your Traefik uses a different name (e.g. 'mytlschallenge'), set TRAEFIK_CERTRESOLVER in .env"
+      DETECTED_CERTRESOLVER=""
+    fi
     return 0
   fi
 
@@ -259,9 +314,25 @@ configure_env() {
   info "Configuring environment..."
   cp "${template}" "${env_file}"
 
-  # Domain
-  read -rp "Domain [postra.igk-digital.cloud]: " domain
-  domain=${domain:-postra.igk-digital.cloud}
+  # Domain (with validation)
+  while true; do
+    read -rp "Domain [postra.igk-digital.cloud]: " domain
+    domain=${domain:-postra.igk-digital.cloud}
+
+    # Reject obvious non-domain values (y, yes, n, no, single chars, etc.)
+    if [[ ! "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$ ]]; then
+      err "'${domain}' is not a valid domain name. Expected format: subdomain.example.com"
+      continue
+    fi
+
+    # Must have at least one dot
+    if [[ ! "$domain" == *.* ]]; then
+      err "'${domain}' is not a valid domain name. Must contain at least one dot."
+      continue
+    fi
+
+    break
+  done
 
   # Generate secrets
   local jwt_secret
@@ -279,6 +350,17 @@ configure_env() {
   sed -i "s|^JWT_SECRET=.*|JWT_SECRET=${jwt_secret}|" "${env_file}"
   sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${pg_password}|" "${env_file}"
   sed -i "s|^TEMPORAL_POSTGRES_PASSWORD=.*|TEMPORAL_POSTGRES_PASSWORD=${temporal_pg_password}|" "${env_file}"
+
+  # Certresolver (auto-detected or ask user)
+  if [ -n "${DETECTED_CERTRESOLVER:-}" ]; then
+    sed -i "s|^TRAEFIK_CERTRESOLVER=.*|TRAEFIK_CERTRESOLVER=${DETECTED_CERTRESOLVER}|" "${env_file}"
+    log "Traefik certresolver set to '${DETECTED_CERTRESOLVER}' (auto-detected)"
+  else
+    read -rp "Traefik certresolver name [letsencrypt]: " certresolver
+    certresolver=${certresolver:-letsencrypt}
+    sed -i "s|^TRAEFIK_CERTRESOLVER=.*|TRAEFIK_CERTRESOLVER=${certresolver}|" "${env_file}"
+    log "Traefik certresolver set to '${certresolver}'"
+  fi
 
   log "Secrets generated and URLs configured for ${domain}"
 
@@ -430,7 +512,7 @@ verify() {
   local http_code
   http_code=$(curl -so /dev/null -w "%{http_code}" --max-time 10 "https://${domain}" 2>/dev/null || echo "000")
 
-  if [ "$http_code" = "200" ] || [ "$http_code" = "302" ]; then
+  if [ "$http_code" = "200" ] || [ "$http_code" = "302" ] || [ "$http_code" = "307" ]; then
     log "HTTPS endpoint responding (HTTP ${http_code})"
   else
     warn "HTTPS returned HTTP ${http_code}. This may be normal if DNS is not yet pointing to this server."

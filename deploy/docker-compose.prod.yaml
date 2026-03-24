@@ -87,7 +87,7 @@ services:
       temporal:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:5000/ || exit 1"]
+      test: ["CMD-SHELL", "ss -lnt | grep -q ':5000'"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -96,7 +96,7 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.postra.rule=Host(`${DOMAIN}`)"
       - "traefik.http.routers.postra.entrypoints=websecure"
-      - "traefik.http.routers.postra.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.postra.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
       - "traefik.http.services.postra.loadbalancer.server.port=5000"
 
   # -----------------------
@@ -213,7 +213,7 @@ services:
     volumes:
       - ../dynamicconfig:/etc/temporal/config/dynamicconfig
     healthcheck:
-      test: ["CMD-SHELL", "tctl cluster health | grep -q SERVING || exit 1"]
+      test: ["CMD-SHELL", "temporal operator cluster health --address temporal:7233 | grep -q SERVING"]
       interval: 15s
       timeout: 5s
       retries: 10
