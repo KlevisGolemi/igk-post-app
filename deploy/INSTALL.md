@@ -255,23 +255,42 @@ git clone --branch igk-branding --depth 1 \
 cd /docker/postra/deploy
 ```
 
-### 6.2 Creer le reseau Traefik
+### 6.2 Configurer Traefik
+
+Le script `deploy.sh` gere automatiquement la detection de Traefik. En mode manuel,
+suivez le cas qui correspond a votre situation :
+
+#### Cas A : Traefik tourne deja sur votre VPS
 
 ```bash
-docker network create traefik-network
+# Verifier si un conteneur Traefik existe (quel que soit son nom)
+docker ps --format '{{.Names}}\t{{.Image}}' | grep -i traefik
 ```
 
-### 6.3 Installer Traefik (si pas deja present)
+Si vous voyez un resultat (ex: `traefik-proxy  traefik:v3.4`), il suffit de :
 
 ```bash
-# Verifier si Traefik tourne deja
-docker ps --filter name=traefik
+# Creer le reseau que Postra utilise
+docker network create traefik-network 2>/dev/null || true
 
-# Si non, l'installer :
+# Connecter votre Traefik existant a ce reseau
+# (remplacez "traefik" par le nom de votre conteneur)
+docker network connect traefik-network traefik
+
+# Verifier la connexion
+docker inspect traefik --format='{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'
+# Doit contenir "traefik-network"
+```
+
+> **Note** : Cela ne deconnecte PAS Traefik de ses reseaux existants.
+> Vos autres applications continueront de fonctionner normalement.
+
+#### Cas B : Pas de Traefik, il faut l'installer
+
+```bash
 cd /docker/postra/deploy/traefik
 
 # Editer traefik.yaml pour ajouter votre email Let's Encrypt
-# (sous certificatesResolvers > letsencrypt > acme, ajouter la ligne email)
 nano traefik.yaml
 ```
 
@@ -285,14 +304,33 @@ certificatesResolvers:
       storage: /letsencrypt/acme.json
 ```
 
-Puis demarrez Traefik :
+Puis :
 
 ```bash
+# Creer le reseau et demarrer Traefik
+docker network create traefik-network 2>/dev/null || true
 docker compose -f docker-compose.traefik.yaml up -d
 
 # Verifier qu'il tourne
 docker ps --filter name=traefik
 ```
+
+#### Cas C : Ports 80/443 deja utilises par un autre proxy
+
+Si un autre reverse proxy (Nginx, Caddy, etc.) occupe les ports 80/443 :
+
+```bash
+# Identifier quel conteneur utilise les ports
+docker ps --format '{{.Names}}\t{{.Ports}}' | grep -E ':80|:443'
+```
+
+Vous avez deux options :
+1. **Remplacer** votre proxy par Traefik (arretez l'ancien, installez Traefik)
+2. **Garder** votre proxy et configurer un reverse proxy vers le conteneur `postiz` sur le port 5000, puis creer le reseau manuellement :
+   ```bash
+   docker network create traefik-network
+   docker network connect traefik-network <votre-proxy>
+   ```
 
 ### 6.4 Configurer les variables d'environnement
 

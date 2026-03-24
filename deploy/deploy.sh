@@ -72,45 +72,104 @@ preflight() {
 # ---------------------------------------------------------------------------
 # 2. Traefik detection & setup
 # ---------------------------------------------------------------------------
+detect_traefik_container() {
+  # Find any running container using a traefik image (regardless of container name)
+  docker ps --format '{{.Names}}\t{{.Image}}' | grep -i 'traefik' | head -1 | cut -f1
+}
+
+ensure_traefik_network() {
+  local traefik_container="$1"
+
+  # Create traefik-network if it doesn't exist
+  if ! docker network inspect traefik-network &>/dev/null; then
+    info "Creating traefik-network..."
+    docker network create traefik-network
+  fi
+
+  # Connect the existing Traefik container to traefik-network if not already on it
+  if [ -n "$traefik_container" ]; then
+    local on_network
+    on_network=$(docker inspect --format='{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$traefik_container" 2>/dev/null)
+
+    if echo "$on_network" | grep -q 'traefik-network'; then
+      log "Traefik container '${traefik_container}' is already on traefik-network"
+    else
+      info "Connecting '${traefik_container}' to traefik-network..."
+      docker network connect traefik-network "$traefik_container"
+      log "Traefik container '${traefik_container}' connected to traefik-network"
+    fi
+  fi
+}
+
+check_ports_conflict() {
+  # Check if ports 80/443 are already bound by Docker
+  local port_owners
+  port_owners=$(docker ps --format '{{.Names}}\t{{.Ports}}' | grep -E '0\.0\.0\.0:(80|443)->' || true)
+
+  if [ -n "$port_owners" ]; then
+    echo "$port_owners"
+    return 0  # ports are in use
+  fi
+  return 1  # ports are free
+}
+
 setup_traefik() {
   info "Checking for Traefik..."
 
-  if docker ps --format '{{.Names}}' | grep -q '^traefik$'; then
-    log "Traefik is already running"
-    # Ensure the network exists
-    if ! docker network inspect traefik-network &>/dev/null; then
-      warn "Traefik is running but traefik-network not found. Creating it..."
-      docker network create traefik-network
-    fi
+  # --- Case 1: A Traefik container is already running ---
+  local traefik_container
+  traefik_container=$(detect_traefik_container)
+
+  if [ -n "$traefik_container" ]; then
+    log "Traefik detected: container '${traefik_container}' is running"
+    ensure_traefik_network "$traefik_container"
     return 0
   fi
 
-  # Check if traefik-network exists (Traefik might be stopped)
+  # --- Case 2: No Traefik container, but ports 80/443 are occupied by Docker ---
+  if check_ports_conflict; then
+    err "Ports 80/443 are already in use by Docker containers:"
+    docker ps --format '  {{.Names}}\t{{.Ports}}' | grep -E '0\.0\.0\.0:(80|443)->'
+    echo ""
+    err "Cannot install Traefik without freeing these ports."
+    echo "Options:"
+    echo "  1. Stop the container using ports 80/443 and re-run this script"
+    echo "  2. If that IS your reverse proxy, create the network and connect it manually:"
+    echo "     docker network create traefik-network"
+    echo "     docker network connect traefik-network <your-proxy-container>"
+    echo "     Then re-run this script."
+    exit 1
+  fi
+
+  # --- Case 3: traefik-network exists but Traefik is stopped ---
   if docker network inspect traefik-network &>/dev/null; then
-    warn "traefik-network exists but Traefik is not running."
+    warn "traefik-network exists but no Traefik container is running."
     echo ""
     read -rp "Start Traefik using the bundled config? [Y/n]: " answer
     answer=${answer:-Y}
     if [[ "$answer" =~ ^[Yy] ]]; then
       start_traefik
+    else
+      warn "Continuing without starting Traefik. Make sure your proxy is running."
     fi
     return 0
   fi
 
-  # No Traefik at all
-  warn "Traefik is not installed."
+  # --- Case 4: No Traefik at all ---
+  warn "No reverse proxy detected."
   echo ""
-  echo "Postra needs Traefik as a reverse proxy for HTTPS (Let's Encrypt)."
+  echo "Postra needs Traefik (or another reverse proxy) for HTTPS."
   read -rp "Install Traefik now? [Y/n]: " answer
   answer=${answer:-Y}
   if [[ "$answer" =~ ^[Yy] ]]; then
     docker network create traefik-network || true
     start_traefik
   else
-    err "Cannot continue without Traefik or another reverse proxy."
-    echo "If you have another proxy, create the 'traefik-network' Docker network manually:"
+    err "Cannot continue without a reverse proxy."
+    echo "If you have another proxy, create the 'traefik-network' Docker network,"
+    echo "connect your proxy container to it, and re-run this script:"
     echo "  docker network create traefik-network"
-    echo "Then connect your proxy container to it and re-run this script."
+    echo "  docker network connect traefik-network <your-proxy-container>"
     exit 1
   fi
 }
