@@ -94,8 +94,10 @@ services:
       start_period: 90s
     labels:
       - "traefik.enable=true"
+      - "traefik.docker.network=traefik-network"
       - "traefik.http.routers.postra.rule=Host(`${DOMAIN}`)"
       - "traefik.http.routers.postra.entrypoints=websecure"
+      - "traefik.http.routers.postra.tls=true"
       - "traefik.http.routers.postra.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
       - "traefik.http.services.postra.loadbalancer.server.port=5000"
 
@@ -215,9 +217,9 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "temporal operator cluster health --address temporal:7233 | grep -q SERVING"]
       interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 40s
+      timeout: 10s
+      retries: 15
+      start_period: 60s
     labels:
       kompose.volume.type: configMap
 
