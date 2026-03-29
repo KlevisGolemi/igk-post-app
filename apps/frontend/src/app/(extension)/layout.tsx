@@ -8,6 +8,7 @@ import { DM_Sans } from 'next/font/google';
 import clsx from 'clsx';
 import { VariableContextComponent } from '@gitroom/react/helpers/variable.context';
 import UtmSaver from '@gitroom/helpers/utils/utm.saver';
+import Script from 'next/script';
 
 const dmSans = DM_Sans({
   weight: ['400', '500', '600', '700'],
@@ -21,6 +22,10 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     <html>
       <head>
         <link rel="icon" href="/favicon.ico" sizes="any" />
+        <Script
+          src="https://mcp.figma.com/mcp/html-to-design/capture.js"
+          strategy="afterInteractive"
+        />
       </head>
       <body
         className={clsx(dmSans.variable, dmSans.className, 'dark text-primary !bg-primary')}
