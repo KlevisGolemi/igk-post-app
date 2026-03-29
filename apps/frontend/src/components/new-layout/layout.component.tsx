@@ -32,6 +32,7 @@ import { MantineWrapper } from '@gitroom/react/helpers/mantine.wrapper';
 import { Impersonate } from '@gitroom/frontend/components/layout/impersonate';
 import { useMenuItem } from '@gitroom/frontend/components/layout/top.menu';
 import { MenuItem } from '@gitroom/frontend/components/new-layout/menu-item';
+import { AnnouncementBanner } from '@gitroom/frontend/components/layout/announcement.banner';
 import { LanguageComponent } from '@gitroom/frontend/components/layout/language.component';
 import { ChromeExtensionComponent } from '@gitroom/frontend/components/layout/chrome.extension.component';
 import NotificationComponent from '@gitroom/frontend/components/notifications/notification.component';
@@ -200,6 +201,7 @@ export const LayoutComponent = ({ children }: { children: ReactNode }) => {
                 <FirstBillingComponent />
               ) : (
                 <>
+                  <AnnouncementBanner />
                   <Support />
                   <NavBar />
                   {/* Main content area */}

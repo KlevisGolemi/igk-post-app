@@ -393,7 +393,7 @@ export const MediaBox: FC<{
         ) : (
           <PlusIcon size={14} />
         )}
-        <div className={loading && 'invisible'}>{t('upload', 'Upload')}</div>
+        <div className={loading ? 'invisible' : undefined}>{t('upload', 'Upload')}</div>
       </button>
     );
   }, [t, loading]);
@@ -743,8 +743,7 @@ export const MultiMediaComponent: FC<{
               handle=".dragging"
             >
               {currentMedia.map((media, index) => (
-                <Fragment key={media.id}>
-                  <div className="cursor-pointer rounded-[5px] w-[40px] h-[40px] border-2 border-tableBorder relative flex transition-all">
+                  <div key={media.id} className="cursor-pointer rounded-[5px] w-[40px] h-[40px] border-2 border-tableBorder relative flex transition-all">
                     <DragHandleIcon className="z-[20] dragging absolute pe-[1px] pb-[3px] -start-[4px] -top-[4px] cursor-move" />
 
                     <div className="w-full h-full relative group">
@@ -795,7 +794,6 @@ export const MultiMediaComponent: FC<{
                       className="absolute -end-[4px] -top-[4px] z-[20] rounded-full bg-white"
                     />
                   </div>
-                </Fragment>
               ))}
             </ReactSortable>
           )}
